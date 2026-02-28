@@ -1,0 +1,613 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MYRR'AUREL ARCHIVE INTERFACE</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+:root {
+–green: #00ff41;
+–green-dim: #00aa2a;
+–green-dark: #003a0f;
+–green-faint: #001a07;
+–bg: #000500;
+–scanline: rgba(0,0,0,0.15);
+}
+
+- { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+height: 100%;
+background: #000;
+overflow: hidden;
+}
+
+body {
+display: flex;
+align-items: center;
+justify-content: center;
+font-family: ‘Share Tech Mono’, monospace;
+}
+
+.crt {
+width: 100%;
+height: 100%;
+background: var(–bg);
+position: relative;
+overflow: hidden;
+display: flex;
+flex-direction: column;
+}
+
+/* Scanlines */
+.crt::before {
+content: ‘’;
+position: fixed;
+top: 0; left: 0; right: 0; bottom: 0;
+background: repeating-linear-gradient(
+0deg,
+var(–scanline) 0px,
+var(–scanline) 1px,
+transparent 1px,
+transparent 3px
+);
+pointer-events: none;
+z-index: 10;
+}
+
+/* Vignette */
+.crt::after {
+content: ‘’;
+position: fixed;
+top: 0; left: 0; right: 0; bottom: 0;
+background: radial-gradient(ellipse at center,
+transparent 60%,
+rgba(0,0,0,0.7) 100%
+);
+pointer-events: none;
+z-index: 11;
+}
+
+/* Phosphor glow on text */
+.terminal {
+flex: 1;
+overflow-y: auto;
+padding: 24px 28px 0;
+color: var(–green);
+font-size: 14px;
+line-height: 1.7;
+text-shadow:
+0 0 4px var(–green),
+0 0 10px rgba(0,255,65,0.4);
+scrollbar-width: none;
+}
+
+.terminal::-webkit-scrollbar { display: none; }
+
+.input-row {
+display: flex;
+align-items: center;
+padding: 12px 28px 20px;
+color: var(–green);
+text-shadow: 0 0 4px var(–green), 0 0 10px rgba(0,255,65,0.4);
+font-size: 14px;
+font-family: ‘Share Tech Mono’, monospace;
+flex-shrink: 0;
+}
+
+.prompt {
+color: var(–green-dim);
+margin-right: 8px;
+user-select: none;
+}
+
+#userInput {
+background: transparent;
+border: none;
+outline: none;
+color: var(–green);
+font-family: ‘Share Tech Mono’, monospace;
+font-size: 14px;
+flex: 1;
+caret-color: var(–green);
+text-shadow: 0 0 4px var(–green);
+text-transform: uppercase;
+}
+
+.line { margin-bottom: 2px; }
+.line.dim { color: var(–green-dim); text-shadow: 0 0 3px rgba(0,170,42,0.3); }
+.line.bright { color: #80ff9f; text-shadow: 0 0 6px var(–green), 0 0 14px rgba(0,255,65,0.6); }
+.line.error { color: #ff4444; text-shadow: 0 0 6px rgba(255,68,68,0.6); }
+.line.input-echo { color: var(–green-dim); }
+.line.fragment {
+color: #aaffbb;
+text-shadow: 0 0 5px var(–green), 0 0 12px rgba(0,255,65,0.5);
+padding-left: 2px;
+border-left: 2px solid var(–green-dim);
+margin-left: 4px;
+padding-left: 10px;
+}
+.line.sys { color: #005510; text-shadow: none; }
+.line.unlock {
+color: #00ff41;
+text-shadow: 0 0 8px var(–green), 0 0 20px rgba(0,255,65,0.7), 0 0 40px rgba(0,255,65,0.3);
+animation: flicker 0.1s ease-in-out;
+}
+
+.spacer { height: 8px; }
+.divider {
+color: var(–green-dark);
+text-shadow: none;
+margin: 4px 0;
+}
+
+@keyframes flicker {
+0% { opacity: 1; }
+25% { opacity: 0.6; }
+50% { opacity: 1; }
+75% { opacity: 0.8; }
+100% { opacity: 1; }
+}
+
+@keyframes blink {
+0%, 50% { opacity: 1; }
+51%, 100% { opacity: 0; }
+}
+
+.typing { display: inline; }
+
+/* Boot sequence animation */
+@keyframes fadeIn {
+from { opacity: 0; }
+to { opacity: 1; }
+}
+
+.boot-line {
+animation: fadeIn 0.1s ease forwards;
+opacity: 0;
+}
+</style>
+
+</head>
+<body>
+<div class="crt">
+  <div class="terminal" id="terminal"></div>
+  <div class="input-row">
+    <span class="prompt">&gt;_</span>
+    <input id="userInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus/>
+  </div>
+</div>
+
+<script>
+var terminal = document.getElementById('terminal');
+var input = document.getElementById('userInput');
+
+var ACCESS_LEVEL = 0; // 0=basic, 1=eiranon unlocked, 2=deep unlocked
+var history = [];
+var historyIdx = -1;
+var booting = true;
+
+var BOOT_LINES = [
+  {text: '', delay: 200},
+  {text: 'ANDORIAN RESEARCH CONSORTIUM', delay: 300, cls: 'bright'},
+  {text: 'MYRR\'AUREL ARCHIVE INTERFACE  v0.3.1', delay: 100},
+  {text: '', delay: 100},
+  {text: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', delay: 50, cls: 'divider'},
+  {text: '', delay: 200},
+  {text: 'INITIALIZING...', delay: 400, cls: 'dim'},
+  {text: 'WEAVE RESONANCE DETECTED  [PARTIAL]', delay: 300, cls: 'dim'},
+  {text: 'ROOT SYSTEM ACCESS  [DEGRADED]', delay: 200, cls: 'dim'},
+  {text: 'ARCHIVE LINK  [UNSTABLE]', delay: 200, cls: 'dim'},
+  {text: 'TEMPORAL INDEX  [CORRUPTED — LAST SYNC: UNKNOWN]', delay: 300, cls: 'dim'},
+  {text: '', delay: 200},
+  {text: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', delay: 50, cls: 'divider'},
+  {text: '', delay: 400},
+  {text: 'SYSTEM READY.', delay: 600, cls: 'bright'},
+  {text: '', delay: 100},
+  {text: 'ACCESS LEVEL: RESTRICTED', delay: 100, cls: 'dim'},
+  {text: '', delay: 100},
+];
+
+var L1_KEYWORDS = {
+  'WEAVE': [
+    'The Weave is not a force that exists independently of what it structures.',
+    'It is the structure itself. Where it fails, what lies beneath is not nothing.'
+  ],
+  'ELARIEN': [
+    'ELARIEN — [SITE STATUS: RUINS]',
+    'Heartwood anchor: INACTIVE. Ley line nexus: ANOMALOUS.',
+    'Wizard Room: INTACT. Structural survey last filed: [DATE CORRUPTED].'
+  ],
+  'HEARTWOOD': [
+    'Seven confirmed anchor sites. Current operational status: [DATA INCOMPLETE].',
+    'Origin of anchor species: [CLASSIFICATION RESTRICTED].',
+    'Note appended by unknown hand: They were not planted by us.'
+  ],
+  'ANDORIAN': [
+    'ANDORIAN RESEARCH CONSORTIUM — established [DATE CORRUPTED].',
+    'Mission directive: observation, documentation, uplift.',
+    'Current personnel roster: [UNABLE TO RETRIEVE].'
+  ],
+  'ANDORIANS': [
+    'ANDORIAN RESEARCH CONSORTIUM — established [DATE CORRUPTED].',
+    'Mission directive: observation, documentation, uplift.',
+    'Current personnel roster: [UNABLE TO RETRIEVE].'
+  ],
+  'MAVASHIK': [
+    'RECORD SEALED — authorization level insufficient.',
+    '— [partial fragment recovered] —',
+    'It knew our names. All of them. Before we spoke.'
+  ],
+  'KYROS': [
+    'KYROS — [SITE CLASSIFICATION: MAXIMUM RESTRICTED]',
+    'Approach vector: [SEALED].',
+    'Last expedition log ends at day 40. Subsequent entries are not in standard notation.'
+  ],
+  'MODRON': [
+    'LIBRARIUM MODRON NETWORK — operational.',
+    'Retrieval capacity: PARTIAL. Lower stack access: SUSPENDED pending review.',
+    'Review initiated: [DATE CORRUPTED]. Review status: PENDING.'
+  ],
+  'SILVER FLAME': [
+    'SILVER FLAME COALITION — [HISTORICAL RECORD]',
+    'A flame appeared during Warforged creation. It was not expected. It was not explained.',
+    'Those who stood beneath it called themselves by its name. Some are still standing.'
+  ],
+  'LIFE STONE': [
+    'LIFE STONE REGISTRY — 6 of 7 accounted for.',
+    'Stone Seven: [LOCATION CLASSIFIED — see restricted index].',
+    'Note: the stones cannot be destroyed. This has been verified.'
+  ],
+  'LIFE STONES': [
+    'LIFE STONE REGISTRY — 6 of 7 accounted for.',
+    'Stone Seven: [LOCATION CLASSIFIED — see restricted index].',
+    'Note: the stones cannot be destroyed. This has been verified.'
+  ],
+  'ELDRAXIS': [
+    'ELDRAXIS — [THEORETICAL INDEX]',
+    'What lies beyond the Weave is not empty.',
+    'Scholars disagree on whether it is patient or simply indifferent. The distinction may not matter.'
+  ],
+  'SYLVANOX': [
+    'SYLVANOX — [FACTION RECORD — RESTRICTED]',
+    'Origin: Alerian elf population, post-Grynn\'Myrr exposure.',
+    'Current status: active. Objectives: [CLASSIFIED]. Infiltration of archive: SUSPECTED.'
+  ],
+  'XAL\'THYREX': [
+    'XAL\'THYREX — [SURVEY RECORD — RESTRICTED]',
+    'Heartwood anchor: CONFIRMED — status anomalous.',
+    'Dral\'zir interaction with anchor: [DATA SUPPRESSED BY ORDER OF COUNCIL].'
+  ],
+  'XALTHYREX': [
+    'XAL\'THYREX — [SURVEY RECORD — RESTRICTED]',
+    'Heartwood anchor: CONFIRMED — status anomalous.',
+    'Dral\'zir interaction with anchor: [DATA SUPPRESSED BY ORDER OF COUNCIL].'
+  ],
+  'DRAL\'ZIR': [
+    'DRAL\'ZIR HIVE — [SURVEY RECORD]',
+    'Classification: assimilative collective intelligence.',
+    'Note: hive has attempted anchor absorption 847 times. Anchor remains unaffected.'
+  ],
+  'DRALZIR': [
+    'DRAL\'ZIR HIVE — [SURVEY RECORD]',
+    'Classification: assimilative collective intelligence.',
+    'Note: hive has attempted anchor absorption 847 times. Anchor remains unaffected.'
+  ],
+  'WARFORGED': [
+    'WARFORGED — [CREATION RECORD]',
+    'First unit activated: [DATE CORRUPTED]. Units created: [CLASSIFIED].',
+    'Units whose current status is unknown: see restricted index. They do not age.'
+  ],
+  'EIRANON': null, // handled separately
+  'ZANARYTH': [
+    'ZANARYTH-VORA — [COSMOLOGICAL INDEX]',
+    'Eight phases. Every civilization passes through them. Every universe passes through them.',
+    'The Andorians were in Vaellyn when they found Kyros. Consider what that means.'
+  ],
+  'ZANARYTH-VORA': [
+    'ZANARYTH-VORA — [COSMOLOGICAL INDEX]',
+    'Eight phases. Every civilization passes through them. Every universe passes through them.',
+    'The Andorians were in Vaellyn when they found Kyros. Consider what that means.'
+  ],
+  'HELP': null, // handled separately
+  'ACCESS': null,
+};
+
+var L2_FRAGMENTS = [
+  '— DESIGNATION: EIRANON —',
+  'UNIT TYPE: Warforged. ORDER: Contemplative. FUNCTION: Custodian, witness, guide.',
+  'ASSIGNED: Elarien site. Catacombs, eastern wing. Indefinite post.',
+  '',
+  'Personal log appended — authorization: EIRANON',
+  '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+  '',
+  'I have been here since before the city fell.',
+  'I watched Elarien burn. I remained because I was told to remain,',
+  'and then because there was no one left to tell me otherwise,',
+  'and then because I understood that remaining was the right thing.',
+  '',
+  'The Tree died to protect them. It absorbed what would have killed them.',
+  'They died anyway. I have had a long time to sit with that.',
+  '',
+  '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+  'RESTRICTED FRAGMENTS — ACCESS LEVEL: EIRANON',
+  '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+  '',
+  '[FRAGMENT 1 — LIFE STONE REGISTRY]',
+  'Stone Seven was not lost. I know where it was taken.',
+  'I know who took it. I have not told the Council.',
+  'I have my reasons. If you are reading this, you may be the reason.',
+  '',
+  '[FRAGMENT 2 — KYROS]',
+  'The Andorians did not stumble onto Kyros.',
+  'The Life Stone found it. The Stone found it because something there',
+  'was calling. We did not understand what we were answering.',
+  '',
+  '[FRAGMENT 3 — THE SEAL]',
+  'The seal holds. But the word holds is doing considerable work.',
+  'What I mean is: the seal is becoming something it was not designed to be.',
+  'Whether that is deterioration or transformation I cannot determine.',
+  'The instruments were not built for this question.',
+  '',
+  '[FRAGMENT 4 — THE TREES]',
+  'I have stood beside the Elarien stump for centuries.',
+  'What I can tell you is this: the root system is still active.',
+  'It is doing something. I do not know what it is doing.',
+  'I do not think the archive has a word for what it is doing.',
+  '',
+  '[FRAGMENT 5 — DEEPER ACCESS]',
+  'There is another level to this system.',
+  'I will not write the key here.',
+  'But I will tell you this: the answer is not a word.',
+  'It is a question. The question the Andorians never thought to ask.',
+  'You have heard it, if you have been paying attention.',
+  '',
+  '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+  'END OF EIRANON LOG',
+];
+
+var L2_KEYWORDS = {
+  'STONE SEVEN': [
+    'I know where it is. I know who has it.',
+    'What I do not know is whether telling you serves the right purpose.',
+    'Come find me. Do not bring the Council.'
+  ],
+  'SEAL': [
+    'The instruments show it holding. The instruments were built by the Andorians.',
+    'The Andorians are gone. No one has recalibrated the instruments.',
+    'I am not saying the seal is failing. I am saying we would not necessarily know.'
+  ],
+  'WHAT DID THEY NOT ASK': [
+    '...',
+    'You are closer than you know.',
+    'The question is not about what the Trees are.',
+    'It is about what the Trees were protecting against.'
+  ],
+  'WHO PLANTED THEM': [
+    'PROCESSING...',
+    '...',
+    'ACCESS LEVEL INSUFFICIENT.',
+    '— partial fragment recovered —',
+    'They came from elsewhere. Not another world. Another everything.',
+    'What they left behind was not a gift. It was a message.',
+    'We have not yet understood what it says.'
+  ],
+];
+
+function addLine(text, cls, delay) {
+  return new Promise(function(resolve) {
+    setTimeout(function() {
+      var div = document.createElement('div');
+      div.className = 'line' + (cls ? ' ' + cls : '');
+      div.textContent = text || '\u00a0';
+      terminal.appendChild(div);
+      terminal.scrollTop = terminal.scrollHeight;
+      resolve();
+    }, delay || 0);
+  });
+}
+
+function addLines(lines, baseDelay, cls) {
+  var p = Promise.resolve();
+  lines.forEach(function(line, i) {
+    p = p.then(function() {
+      return addLine(line, cls, baseDelay || 0);
+    });
+  });
+  return p;
+}
+
+async function boot() {
+  var cumDelay = 0;
+  for (var i = 0; i < BOOT_LINES.length; i++) {
+    var l = BOOT_LINES[i];
+    cumDelay += l.delay;
+    await addLine(l.text, l.cls, l.delay);
+  }
+  booting = false;
+  input.focus();
+}
+
+function processInput(raw) {
+  var cmd = raw.trim().toUpperCase();
+  if (!cmd) return;
+
+  // Echo input
+  addLine('> ' + raw.trim(), 'input-echo');
+  addLine('', '');
+
+  // History
+  history.unshift(raw.trim());
+  historyIdx = -1;
+
+  // HELP
+  if (cmd === 'HELP') {
+    addLine('AVAILABLE COMMANDS:', 'dim');
+    addLine('  TYPE ANY WORD TO QUERY THE ARCHIVE', 'dim');
+    addLine('  CLEAR — clear screen', 'dim');
+    addLine('  ACCESS — display current access level', 'dim');
+    addLine('', '');
+    addLine('THE ARCHIVE RESPONDS TO WHAT IT RECOGNIZES.', 'dim');
+    addLine('NOT EVERYTHING HAS BEEN INDEXED.', 'dim');
+    addLine('', '');
+    return;
+  }
+
+  // CLEAR
+  if (cmd === 'CLEAR') {
+    terminal.innerHTML = '';
+    return;
+  }
+
+  // ACCESS
+  if (cmd === 'ACCESS') {
+    if (ACCESS_LEVEL === 0) {
+      addLine('ACCESS LEVEL: RESTRICTED', 'dim');
+      addLine('AUTHORIZATION REQUIRED FOR DEEPER INDEX.', 'dim');
+    } else if (ACCESS_LEVEL === 1) {
+      addLine('ACCESS LEVEL: EIRANON', 'bright');
+      addLine('CUSTODIAN LOG: UNLOCKED', 'dim');
+      addLine('RESTRICTED FRAGMENTS: ACCESSIBLE', 'dim');
+    } else {
+      addLine('ACCESS LEVEL: [CLASSIFIED]', 'bright');
+    }
+    addLine('', '');
+    return;
+  }
+
+  // EIRANON — unlock layer 2
+  if (cmd === 'EIRANON') {
+    if (ACCESS_LEVEL >= 1) {
+      addLine('DESIGNATION RECOGNIZED — ACCESS ALREADY GRANTED.', 'dim');
+      addLine('', '');
+      addLine('Re-displaying custodian log...', 'dim');
+      addLine('', '');
+      displayL2();
+      return;
+    }
+    ACCESS_LEVEL = 1;
+    addLine('DESIGNATION RECOGNIZED.', 'bright');
+    addLine('', '');
+    addLine('CROSS-REFERENCING WARFORGED REGISTRY...', 'dim');
+    setTimeout(function() {
+      addLine('UNIT CONFIRMED — EIRANON — ELARIEN CUSTODIAN', 'bright');
+      addLine('', '');
+      addLine('UNLOCKING CUSTODIAN LOG...', 'dim');
+      addLine('', '');
+      setTimeout(function() {
+        displayL2();
+      }, 800);
+    }, 1000);
+    return;
+  }
+
+  // Layer 2 keywords
+  if (ACCESS_LEVEL >= 1) {
+    var l2match = null;
+    Object.keys(L2_KEYWORDS).forEach(function(k) {
+      if (cmd === k) l2match = L2_KEYWORDS[k];
+    });
+    if (l2match) {
+      l2match.forEach(function(line) {
+        addLine(line, line === '...' ? 'dim' : 'fragment');
+      });
+      addLine('', '');
+      return;
+    }
+  }
+
+  // Layer 1 keywords
+  if (L1_KEYWORDS.hasOwnProperty(cmd) && L1_KEYWORDS[cmd] !== null) {
+    var frags = L1_KEYWORDS[cmd];
+    addLine('QUERYING INDEX...', 'dim');
+    setTimeout(function() {
+      frags.forEach(function(line) {
+        addLine(line, 'fragment');
+      });
+      addLine('', '');
+    }, 400);
+    return;
+  }
+
+  // Partial matches
+  var partialMatch = null;
+  Object.keys(L1_KEYWORDS).forEach(function(k) {
+    if (k !== 'EIRANON' && k !== 'HELP' && k !== 'ACCESS' && L1_KEYWORDS[k]) {
+      if (cmd.indexOf(k) !== -1 || k.indexOf(cmd) !== -1) {
+        partialMatch = L1_KEYWORDS[k];
+      }
+    }
+  });
+
+  if (partialMatch) {
+    addLine('PARTIAL MATCH FOUND.', 'dim');
+    setTimeout(function() {
+      partialMatch.forEach(function(line) {
+        addLine(line, 'fragment');
+      });
+      addLine('', '');
+    }, 400);
+    return;
+  }
+
+  // No match responses
+  var noMatch = [
+    'QUERY NOT RECOGNIZED. INDEX ENTRY ABSENT OR RESTRICTED.',
+    'NO RECORD FOUND. THIS MAY BE BY DESIGN.',
+    'TERM NOT IN ACCESSIBLE INDEX. TRY A DIFFERENT APPROACH.',
+    'ARCHIVE DOES NOT RESPOND TO THIS QUERY.',
+    '... [connection fluctuation] ...',
+    'RETRIEVAL FAILED. SOME RECORDS WERE REMOVED BEFORE THIS TERMINAL CAME ONLINE.',
+  ];
+  addLine(noMatch[Math.floor(Math.random() * noMatch.length)], 'error');
+  addLine('', '');
+}
+
+function displayL2() {
+  var p = Promise.resolve();
+  L2_FRAGMENTS.forEach(function(line) {
+    p = p.then(function() {
+      return addLine(line, line.startsWith('[FRAGMENT') ? 'bright' :
+             line.startsWith('━') ? 'divider' :
+             line === '' ? '' :
+             line.startsWith('I have') || line.startsWith('The Tree') || line.startsWith('They died') ? 'fragment' : 'dim', 18);
+    });
+  });
+  p.then(function() { addLine('', ''); });
+}
+
+input.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    var val = input.value;
+    input.value = '';
+    if (!booting) processInput(val);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (historyIdx < history.length - 1) {
+      historyIdx++;
+      input.value = history[historyIdx];
+    }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (historyIdx > 0) {
+      historyIdx--;
+      input.value = history[historyIdx];
+    } else {
+      historyIdx = -1;
+      input.value = '';
+    }
+  }
+});
+
+// Keep input focused
+document.addEventListener('click', function() { input.focus(); });
+document.addEventListener('keydown', function() { input.focus(); });
+
+boot();
+</script>
+
+</body>
+</html>
